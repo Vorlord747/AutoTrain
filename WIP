@@ -1,0 +1,1488 @@
+local computer = require("computer")
+local component = require("component")
+local Network = component.modem
+local Train = component.ir_remote_control
+Network.open(5)
+Network.open(4)
+Input = ...
+
+-- Initialize constants
+RATE_OF_ACCELERATION        = 0
+BRAKE_RATE                  = 0
+MAX_ACCELERATION            = 0
+MIN_ACCELERATION            = 0
+THROTTLE_INCREMENT          = 0
+BRAKE_INCREMENT             = 0
+HORN_LENGTH                 = 0
+DEFAULT_SPEED               = 0
+STATION_ACCURACY            = 0
+TARGET_SPEED                = 0
+STOPPING_GRADIENT           = 0
+STOPPING_ACCELERATION_GAIN  = 5
+STOPPING_RESET_AREA_SIZE    = 12
+PROP_TO_ACC_DIFF_GAIN       = 12
+PROP_TO_SPEED_DIFF_GAIN     = 0.25
+DEBUG_MODE                  = false
+COMPUTER_LOOP_SPEED         = 0.1
+SIGNAL_STOPPING_ACCURACY    = 5
+STOPPED_AT_RED_CHECK_FREQUENCY = 4
+
+-- Initialize variables
+StartingSpeed               = 0
+CurrentSpeed                = 0
+PreviousSpeed               = StartingSpeed
+Acceleration                = 0
+CentrePoint                 = 0
+TargetAcceleration          = 0
+CurveInvert                 = 0
+CurvePeak                   = 0
+BrakeOutput                 = 0
+ThrottleOutput              = 0
+StoppingTriggerSpeed        = 0
+StoppingDistance            = 0
+PropToAccDiff               = 0
+MultipliedBrakeOutput       = 0
+Stopping                    = false
+Station                     = 1
+PreviousStation             = -1
+
+RouteMarkersList            = {}    -- Table of all markers (stations, signals, switches, etc) eg. [[station, 1778.1, 1230, 1, 1], [signal, 1757, 1231, 1757, 1231, RED]]
+StationsList                = {}    -- Table of all stations eg. [[station, 1778.1, 1230, 1, 1], [station, 1766.2, 1250, 1, 1]]
+NumberOfStations            = 0
+SignalsList                 = {}    -- List of which RoutePOI items are signals 
+NextSignal                  = 0     -- Keeps track of which item in SignalsList we are up to 
+SpeedLimits                 = {}
+
+EnteredStoppingResetArea    = false
+Reverser                    = 1
+PastStation                 = false
+PreviousStoppingDistance    = 0
+BackingToStation            = false
+Selected = 1
+NumberOfOptions = 0
+SelectionID = 0
+CurrentPage = nil
+WaitingForSelection = true
+Coords = "na"
+SelectedRoute = ""
+Str1 = "69"
+debug = ""
+Reversing = false
+StopTime = 0
+DirectionFromStation = ""
+NumberOfStops = 0
+DistanceToSignal = 0
+PreviousDistanceToSignal = 0
+PastSignal = false
+DistanceToSwitch = 0
+PreviousDistanceToSwitch = 0
+PastSwitch = false
+NextStationRouteMarkersListIndex = 0
+ReadyToLeaveStation = false
+
+
+NextMarkerIndex = 1
+NextStation = 1
+
+--PreviousNextPOI = 1
+
+
+function SplitString(inputstr, sep)
+    if sep == nil then
+        sep = "%s"
+    end
+    local t={}
+    for str in string.gmatch(inputstr, "([^"..sep.."]+)") do
+        table.insert(t, str)
+    end
+    return t
+end
+
+
+function ReadLine(Filename)
+    if FileExists(Filename) == false then
+        print("FILE DOES NOT EXIST")
+        os.sleep(10)
+    end
+
+    File = io.open(Filename, "r")
+    for line in io.lines(Filename) do
+        local markerData = SplitString(line)
+
+        if markerData[1] == "station" then
+            table.insert(RouteMarkersList, markerData)
+            table.insert(StationsList, markerData)
+            
+        elseif markerData[1] == "signal" then
+            table.insert(RouteMarkersList, markerData)
+            table.insert(SignalsList, markerData)
+
+        elseif markerData[1] == "switch" then
+            table.insert(RouteMarkersList, markerData)
+
+        elseif markerData[1] == "speedlimit" then
+            table.insert(RouteMarkersList, markerData)
+
+        elseif markerData[1] == "whistle" then
+            table.insert(RouteMarkersList, markerData)
+
+        elseif markerData[1] == "waypoint" then
+            table.insert(RouteMarkersList, markerData)
+        elseif markerData[1] == "CONSTANTS" then
+            -- RATE_OF_ACCELERATION= tonumber(markerData[2])
+            -- BRAKE_RATE          = tonumber(markerData[3])
+            -- MAX_ACCELERATION    = tonumber(markerData[4])
+            -- MIN_ACCELERATION    = tonumber(markerData[5])
+            -- THROTTLE_INCREMENT  = tonumber(markerData[6])
+            -- BRAKE_INCREMENT     = tonumber(markerData[7])
+            -- HORN_LENGTH         = tonumber(markerData[8])
+            -- DEFAULT_SPEED       = tonumber(markerData[9])
+            -- STATION_ACCURACY    = tonumber(markerData[10])
+            -- STOPPING_GRADIENT   = tonumber(markerData[11])
+            RATE_OF_ACCELERATION= 0.015
+            BRAKE_RATE          = 0.25
+            MAX_ACCELERATION    = 200
+            MIN_ACCELERATION    = 0.5
+            THROTTLE_INCREMENT  = 0.025
+            BRAKE_INCREMENT     = 0.1
+            HORN_LENGTH         = 1
+            DEFAULT_SPEED       = 60
+            STATION_ACCURACY    = 1
+            STOPPING_GRADIENT   = 0.2
+        end
+        RATE_OF_ACCELERATION= 0.015
+        BRAKE_RATE          = 0.25
+        MAX_ACCELERATION    = 200
+        MIN_ACCELERATION    = 0.5
+        THROTTLE_INCREMENT  = 0.025
+        BRAKE_INCREMENT     = 0.1
+        HORN_LENGTH         = 1
+        DEFAULT_SPEED       = 60
+        STATION_ACCURACY    = 1
+        STOPPING_GRADIENT   = 0.2
+    end
+
+    File:close()
+    NumberOfStations = 0
+    for _, Item in ipairs(StationsList) do
+        NumberOfStations = NumberOfStations + 1
+    end
+
+end
+
+
+-- function Stopped()
+--     print("Stopped()")
+--     if RouteMarkersList[NextMarkerIndex][1] == "signal" then
+        
+--         print("THIS SHOULDN'T HAPPEN ANYMORE")
+--         -- print("Stopped at signal")
+        
+--         -- NewCheckSignals()
+--         local signalResult = SplitString(SignalController("Check "..RouteMarkersList[NextMarkerIndex][2].." "..RouteMarkersList[NextMarkerIndex][3]))
+--         if signalResult[1] ~= "GREEN" then
+--             print("Waiting; signal = ")
+--             print(signalResult[1])
+--             os.sleep(2)
+--         end
+
+--     elseif RouteMarkersList[NextMarkerIndex][1] == "station" then
+--         print("Stopped at station")
+--         PastStation = false
+--         BackingToStation = false
+--         --if Stopping then
+--             NextMarkerIndex = NextMarkerIndex + 1
+--             PassingPOI = true
+--             print("NEXTSTOP INCREMENT B")
+--             --os.sleep(2)
+--             if NextMarkerIndex > #RouteMarkersList then NextMarkerIndex = 1 end
+--         --end
+--         Stopping = false
+--         Reverser = tonumber(StationsList[Station][4])
+--         Train.setReverser(Reverser)
+--         for _, Item in ipairs(StationsList) do Item[5] = false end
+--         StationsList[Station][5] = true
+--         print("sleeping for " .. tonumber(StationsList[Station][4]))
+--         os.sleep(tonumber(StationsList[Station][4]))
+--         Station = Station + 1
+--         if Station > NumberOfStations then Station = 1 end
+--         File = io.open("AutoTrain persistence", "w")
+--         File:write(Station)
+--         File:close()
+--         print("Starting")
+--     elseif RouteMarkersList[NextMarkerIndex][1] == "switch" then
+--         NextMarkerIndex = NextMarkerIndex + 1
+--         PassingPOI = true
+--         print("NEXTSTOP INCREMENT B2")
+--         if NextMarkerIndex > #RouteMarkersList then NextMarkerIndex = 1 end
+--     else
+--         print("ERROR: What did we just stop at?")
+--         print("Stopped at "..tostring(RouteMarkersList[NextMarkerIndex][1]))
+--         os.sleep(2)
+--     end
+-- end
+
+
+-- UNUSED 
+-- function GetStoppingDistanceOLD()
+--     PreviousStoppingDistance = StoppingDistance
+--     if Station ~= PreviousStation then
+--         PreviousStation = Station
+--     end
+--     DistanceX = TargetX - CurrentX
+--     if DistanceX < 0 then DistanceX = DistanceX * -1 end
+--     DistanceZ = TargetZ - CurrentZ
+--     if DistanceZ < 0 then DistanceZ = DistanceZ * -1 end
+--     if DistanceX > DistanceZ then
+--         StoppingDistance = DistanceX
+--     else
+--         StoppingDistance = DistanceZ
+--     end
+--     return StoppingDistance
+-- end
+
+
+function NewAtStationCheck()
+    if  CurrentZ < TargetZ + STATION_ACCURACY and 
+        CurrentZ > TargetZ - STATION_ACCURACY and 
+        CurrentX < TargetX + STATION_ACCURACY and 
+        CurrentX > TargetX - STATION_ACCURACY then
+        return true
+    end
+end
+
+
+function GetStoppingTriggerSpeed(distance)
+    StoppingTriggerSpeed = STOPPING_GRADIENT * distance
+    if StoppingTriggerSpeed < 0 then StoppingTriggerSpeed = StoppingTriggerSpeed * -1 end
+    if StoppingTriggerSpeed < 0.5 then StoppingTriggerSpeed = 0.5 end   -- Trying minimum StoppingTriggerSpeed 
+    if NewAtStationCheck() then
+        StoppingTriggerSpeed = 0
+    end
+    return StoppingTriggerSpeed
+end
+
+
+function GetStoppingAcceleration()
+    if CurrentSpeed > StoppingTriggerSpeed then 
+        if StoppingDistance ~= 0 then
+            if StoppingDistance < 0 then
+                return ((CurrentSpeed/(StoppingDistance*-1))*-1) * STOPPING_ACCELERATION_GAIN
+            else
+                return ((CurrentSpeed/StoppingDistance)*-1) * STOPPING_ACCELERATION_GAIN
+            end
+        else
+            return 0.5
+        end
+    else
+        if CurrentSpeed == 0 then
+            return 0.5
+        end
+    end
+end
+
+
+function MatchStoppingAcceleration() 
+    BrakeOutput = component.ir_remote_control.info().brake
+    PropToAccDiff = (Acceleration - TargetAcceleration) * PROP_TO_ACC_DIFF_GAIN
+    if PropToAccDiff < 0 then PropToAccDiff = PropToAccDiff * -1 end
+    PropToSpeedDiff = (CurrentSpeed/50) * PROP_TO_SPEED_DIFF_GAIN
+    if PropToSpeedDiff < 0 then PropToSpeedDiff = PropToSpeedDiff * -1 end
+    if Acceleration < TargetAcceleration then
+        if BrakeOutput ~= 0 then
+            if CurrentSpeed == 0 then
+                BrakeOutput = 0
+            else
+                BrakeOutput = BrakeOutput - (BRAKE_INCREMENT * PropToAccDiff)
+                MultipliedBrakeOutput = BrakeOutput * PropToSpeedDiff
+                if BrakeOutput < 0 then BrakeOutput = 0 end
+                if MultipliedBrakeOutput < 0 then MultipliedBrakeOutput = 0 end
+            end
+        else
+            ThrottleOutput = ThrottleOutput + (THROTTLE_INCREMENT * PropToAccDiff)
+            if ThrottleOutput > 1 then ThrottleOutput = 1 end
+        end
+    else
+        if ThrottleOutput ~= 0 then
+            ThrottleOutput = ThrottleOutput - (THROTTLE_INCREMENT * PropToAccDiff)
+            if ThrottleOutput < 0 then ThrottleOutput = 0 end
+        else
+            BrakeOutput = BrakeOutput + (BRAKE_INCREMENT * PropToAccDiff)
+            MultipliedBrakeOutput = BrakeOutput * PropToSpeedDiff
+            if BrakeOutput > 1 then BrakeOutput = 1 end
+            if MultipliedBrakeOutput > 1 then MultipliedBrakeOutput = 1 end 
+        end
+    end
+    component.ir_remote_control.setThrottle(ThrottleOutput)
+    component.ir_remote_control.setTrainBrake(MultipliedBrakeOutput)
+end
+
+
+function NewStoppingTrain()
+    print("NewStoppingTrain()")
+    if StoppingDistance < 50 or PastStation == true then
+        if StoppingDistance > PreviousStoppingDistance or PastStation == true then
+            PastStation = true
+            if CurrentSpeed ~= 0 then
+                component.ir_remote_control.setThrottle(0)
+                component.ir_remote_control.setTrainBrake(1)
+            else
+                Reverser = Reverser * -1
+                Train.setReverser(Reverser)
+                PastStation = false
+            end
+        else
+            if CurrentSpeed < 0.1 and CurrentSpeed > -0.1 and NewAtStationCheck() then
+                print("huludulu")
+                StoppedAtStation()
+            else
+                if NewAtStationCheck() then
+                    component.ir_remote_control.setThrottle(0)
+                    component.ir_remote_control.setTrainBrake(1)
+                else
+                    MatchStoppingAcceleration()
+                end
+            end
+        end
+    else
+        if CurrentSpeed < 0.1 and CurrentSpeed > 0.1 and NewAtStationCheck() then
+            print("abadaba")
+            StoppedAtStation()
+        else
+            MatchStoppingAcceleration()
+        end
+    end
+end
+
+
+function ChangeSpeedLimitCheck()
+    print("ChangeSpeedLimitCheck()")
+    SpeedSignMargin = CurrentSpeed/10
+    for i, SpeedSign in ipairs(SpeedLimits) do
+        if CurrentX < (SpeedSign[1]+SpeedSignMargin) and CurrentX > (SpeedSign[1]-SpeedSignMargin) and CurrentZ < (SpeedSign[2]+SpeedSignMargin) and CurrentZ > (SpeedSign[2]-SpeedSignMargin) then
+            TARGET_SPEED = tonumber(SpeedSign[3])
+        end
+    end
+end
+
+
+function GetTargetAcceleration()
+    print("GetTargetAcceleration()")
+    CentrePoint = ((TARGET_SPEED-StartingSpeed)/2)+StartingSpeed
+    if StartingSpeed > TARGET_SPEED then
+        CurveInvert = -1
+        if CurrentSpeed < CentrePoint then CurvePeak = TARGET_SPEED
+        else CurvePeak = StartingSpeed end 
+    else
+        CurveInvert = 1
+        if CurrentSpeed < CentrePoint then CurvePeak = StartingSpeed
+        else CurvePeak = TARGET_SPEED end
+    end
+    TargetAcceleration = (RATE_OF_ACCELERATION * (CurrentSpeed - CurvePeak)^2)*CurveInvert
+    if CurveInvert == 1 then
+        if CurrentSpeed < CentrePoint then            
+            if TargetAcceleration < MIN_ACCELERATION then TargetAcceleration = MIN_ACCELERATION end
+        end
+    else
+        if CurrentSpeed > CentrePoint then     
+            if TargetAcceleration > (MIN_ACCELERATION*-1) then TargetAcceleration = (MIN_ACCELERATION*-1) end
+        end
+    end
+    if CurveInvert == 1 then
+        if TargetAcceleration > MAX_ACCELERATION then TargetAcceleration = MAX_ACCELERATION end
+    else
+        if TargetAcceleration < (MAX_ACCELERATION*-1) then TargetAcceleration = (MAX_ACCELERATION*-1) end
+    end
+    if CurveInvert == 1 then
+        if CurrentSpeed > TARGET_SPEED then
+            TargetAcceleration = TargetAcceleration * -1
+        end
+    else
+        if CurrentSpeed < TARGET_SPEED then
+            TargetAcceleration = TargetAcceleration * -1
+        end
+    end
+end
+
+
+function ReachSpeed()
+    print("ReachSpeed()")
+    BrakeOutput = component.ir_remote_control.info().brake
+    ThrottleOutput = component.ir_remote_control.info().throttle
+    GetTargetAcceleration()
+    OverspeedReactivity = 4
+    if Acceleration < TargetAcceleration then
+        if BrakeOutput ~= 0 then
+            BrakeOutput = BrakeOutput - BRAKE_INCREMENT
+            if BrakeOutput < 0 then BrakeOutput = 0 end
+        else
+            ThrottleOutput = ThrottleOutput + THROTTLE_INCREMENT
+            if ThrottleOutput > 1 then ThrottleOutput = 1 end
+        end
+    else
+        if ThrottleOutput ~= 0 then
+            if (CurrentSpeed > (TARGET_SPEED+OverspeedReactivity)) then
+                ThrottleOutput = 0
+            else
+                ThrottleOutput = ThrottleOutput - THROTTLE_INCREMENT
+                if ThrottleOutput < 0 then ThrottleOutput = 0 end
+            end
+        else
+            BrakeOutput = BrakeOutput + BRAKE_INCREMENT
+            if BrakeOutput > 1 then BrakeOutput = 1 end
+        end
+    end
+    component.ir_remote_control.setThrottle(ThrottleOutput)
+    component.ir_remote_control.setTrainBrake(BrakeOutput)
+end
+
+
+function GetAcceleration()
+    print("GetAcceleration()")
+    Acceleration = CurrentSpeed - PreviousSpeed
+    PreviousSpeed = CurrentSpeed
+    return Acceleration
+end
+
+
+function FileExists(Input)
+    print("FileExists()")
+    local f=io.open(Input,"r")
+    if f~=nil then 
+        io.close(f) 
+        return true
+    else 
+        return false
+    end
+end
+
+
+function Debug()
+    DebugSpeed = tonumber(string.format("%.2f", CurrentSpeed))
+    DebugAcceleration = tonumber(string.format("%.2f", Acceleration))
+    DebugTargetAcceleration = tonumber(string.format("%.2f", TargetAcceleration))
+    DebugDistanceToNextStop = StoppingDistance
+    DebugNextStop = Station
+    DebugCoords = CurrentX.." "..CurrentZ
+    DebugThrottle = tonumber(string.format("%.4f", component.ir_remote_control.info().throttle))
+    DebugBrake = tonumber(string.format("%.2f", component.ir_remote_control.info().brake))
+    DebugReverser = Reverser
+    DebugPreviousStoppingDistance = PreviousStoppingDistance
+    DebugStoppingTriggerSpeed = StoppingTriggerSpeed
+    DebugPastStation = tostring(PastStation)
+    DebugBackingToStation = tostring(BackingToStation)
+    os.execute("cls")
+    print("Speed:                   "..DebugSpeed)
+    --print("StoppingTriggerSpeed:    "..DebugStoppingTriggerSpeed)
+    --print("Acceleration:            "..DebugAcceleration)
+    --print("Target Acceleration:     "..DebugTargetAcceleration)
+    print("Coords:                  "..DebugCoords)
+    print("Next station:            "..DebugNextStop)
+    -- print("PreviousStoppingDistance:"..DebugPreviousStoppingDistance)
+    print("Throttle:                "..DebugThrottle)
+    print("Brake:                   "..DebugBrake)
+    print("Reverser:                "..DebugReverser)
+    --print("PastStation:             "..DebugPastStation)
+    --print("Speed limit:             "..TARGET_SPEED)
+    print("TargetX:                 "..TargetX)
+    print("TargetZ:                 "..TargetZ)
+    print("NextStop:                "..NextMarkerIndex)
+    print("NextPOI:                 "..NextMarkerIndex)
+    --print("Distance to next stop:   "..DebugDistanceToNextStop)
+    if DebugNextHalt ~= nil then
+        print("Upcoming: "..DebugNextHalt)
+    end
+    print()
+    -- print("BackingToStation:        "..DebugBackingToStation)
+end
+
+
+function SignalController(ToBroadcast)
+    print("SignalController()")
+    local event = require("event")
+    component.modem.broadcast(4, ToBroadcast) 
+    local _, _, from, port, _, message = event.pull("modem_message") 
+    print("Recieved "..message)
+    return message
+end
+
+
+function CalculateDistance(FromX, FromZ, ToX, ToZ)
+    print("CalculateDistance()")
+    local DistanceX
+    local DistanceZ
+
+    DistanceX = ToX - FromX
+    if DistanceX < 0 then DistanceX = DistanceX * -1 end  -- Keeps DistanceX positive 
+    DistanceZ = ToZ - FromZ
+    if DistanceZ < 0 then DistanceZ = DistanceZ * -1 end  -- Keeps SignalDistanceZ positive 
+
+    if DistanceX > DistanceZ then   -- Returns the larger of the two 
+        return DistanceX
+    else
+        return DistanceZ
+    end
+end
+
+
+-- UNUSED 
+-- function ChangeSignals()
+--     local i = (#RouteMarkersList[RouteMarkerNextIndexAny] - 3)
+--     if i > 0 then
+--         i = i/4
+--     end
+--     print(i.." signals to change")
+--     -- Set passing signal to red 
+--     SignalController("Set "..RouteMarkersList[RouteMarkerNextIndexAny][2].." "..RouteMarkersList[RouteMarkerNextIndexAny][3].." RED")
+--     for n = 1, i, 1 do
+--         local ToBroadcast = RouteMarkersList[RouteMarkerNextIndexAny][n*4].." "..RouteMarkersList[RouteMarkerNextIndexAny][(n*4)+1].." "..RouteMarkersList[RouteMarkerNextIndexAny][(n*4)+2].." "..RouteMarkersList[RouteMarkerNextIndexAny][(n*4)+3]
+--         print(ToBroadcast)
+--         SignalController(ToBroadcast)
+--     end
+
+--     -- set current signal before the rest 
+-- end
+
+
+-- UNUSED 
+-- function PastPOICheck()
+--     if RouteMarkersList[RouteMarkerNextIndexAny][1] == "signal" then
+--         -- if next POI is a signal 
+--         PreviousDistanceToSignal = DistanceToSignal
+--         DistanceToSignal = CalculateDistance(CurrentX, CurrentZ, RouteMarkersList[RouteMarkerNextIndexAny][2], RouteMarkersList[RouteMarkerNextIndexAny][3])
+--         if DistanceToSignal < 50 then
+--             -- if within range 
+--             print("Approaching signal "..DistanceToSignal.." blocks away")
+--             if DistanceToSignal > PreviousDistanceToSignal then
+--                 -- if getting further away 
+                
+--                 --if NextPOI == PreviousNextPOI then
+--                 if PassingPOI == false then
+--                     -- if we haven't just changed NextStop 
+
+--                     -- get previous station's reverser 
+--                     local i = RouteMarkerNextIndexAny - 1
+--                     while RouteMarkersList[i][1] ~= "station" do
+--                         i = i - 1
+--                         if i < 1 then
+--                             i = #RouteMarkersList
+--                         end
+--                     end
+
+--                     if Reverser == tonumber(RouteMarkersList[i][5]) then
+--                         -- if going the right way 
+--                         local tmp = SignalController("Check "..RouteMarkersList[RouteMarkerNextIndexAny][2].." "..RouteMarkersList[RouteMarkerNextIndexAny][3])
+--                         if tmp == "GREEN" then
+--                             print("Passed green signal")
+--                             ChangeSignals()
+--                             RouteMarkerNextIndexAny = RouteMarkerNextIndexAny + 1
+--                             PassingPOI = true
+--                             print("NEXT STOP INCREMENT F")
+--                             os.sleep(2)
+--                             if RouteMarkerNextIndexAny > #RouteMarkersList then
+--                                 RouteMarkerNextIndexAny = 1
+--                             end
+--                             --SignalController("Set "..StationsAndSignals[NextStop][2].." "..StationsAndSignals[NextStop][3].." RED")
+--                         elseif tmp == "RED" then
+--                             print("Passed red light")
+--                         else
+--                             print("ERROR: Recieved: "..tmp)
+--                         end
+                        
+--                     end
+--                 else
+--                     print("Just changed NextStop, don't check if passed POI")
+--                     --print(PreviousNextPOI.." ~= "..NextPOI)
+--                     PassingPOI = false
+--                 end
+
+--             end
+--         end
+
+--     elseif RouteMarkersList[RouteMarkerNextIndexAny][1] == "station" then
+--         -- if next POI is a station     
+--         print("Next POI is a station")
+--     elseif RouteMarkersList[RouteMarkerNextIndexAny][1] == "switch" then
+--         -- next POI is a switch trigger 
+
+--         if CalculateDistance(CurrentX, CurrentZ, RouteMarkersList[RouteMarkerNextIndexAny][2], RouteMarkersList[RouteMarkerNextIndexAny][3]) < 20 then
+--             -- CHANGE SWITCH 
+--             SignalController("Switch "..RouteMarkersList[RouteMarkerNextIndexAny][2].." "..RouteMarkersList[RouteMarkerNextIndexAny][3].." "..RouteMarkersList[RouteMarkerNextIndexAny][4])
+--         end
+
+--     else
+--         print("ERROR: StationsAndSignals[NextStop][1] = neither signal or station")
+--         print(RouteMarkersList[RouteMarkerNextIndexAny][1])
+--     end
+-- end
+
+
+-- UNUSED 
+-- function PastSignalCheck()
+
+--     -- Gets distance to signal or station 
+    
+--     if RouteMarkersList[RouteMarkerNextIndexAny][1] == "Signal" then
+
+--         DistanceToSignal = CalculateDistance(CurrentX, CurrentZ, RouteMarkersList[RouteMarkerNextIndexAny][2], RouteMarkersList[RouteMarkerNextIndexAny][3])
+
+
+--         -- If close and getting further away, we have passed the signal 
+--         -- Maybe check if the reverser matches the direction from the previuos station 
+--         if PastSignal == false then
+--             if DistanceToSignal < 10 then
+--                 print("DistanceToSignal = "..DistanceToSignal)
+--                 if DistanceToSignal > PreviousDistanceToSignal then
+--                     RouteMarkerNextIndexAny = RouteMarkerNextIndexAny + 1
+--                     PassingPOI = true
+--                     print("NEXTSTOP INCREMENT C")
+--                     os.sleep(2)
+--                     if RouteMarkerNextIndexAny > #RouteMarkersList then
+--                         RouteMarkerNextIndexAny = 1
+--                     end
+--                     PastSignal = true
+--                 end
+--             end
+--         else
+--             PastSignal = false
+--         end
+--     end
+
+-- end
+
+
+function PastNextSignalCheck()
+    print("PastNextSignalCheck()")
+    PreviousDistanceToSignal = DistanceToSignal
+    print("RouteMarkerNextIndexSignal = "..RouteMarkerNextIndexSignal)
+    DistanceToSignal = CalculateDistance(CurrentX, CurrentZ, RouteMarkersList[RouteMarkerNextIndexSignal][2], RouteMarkersList[RouteMarkerNextIndexSignal][3])
+    if DistanceToSignal < 50 then
+        if DistanceToSignal > PreviousDistanceToSignal then
+            if CurrentSpeed > 0 then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+
+function NextSignalStatusCheck()
+    print("NextSignalStatusCheck()")
+    local signalResult = SplitString(SignalController("Check "..RouteMarkersList[RouteMarkerNextIndexSignal][2].." "..RouteMarkersList[RouteMarkerNextIndexSignal][3]))
+    return signalResult[1]
+end
+
+
+function GetRouteMarkerIndexOfNextOfType(markerType)
+    print("GetRouteMarkerIndexOfNextSignal()")
+    -- Start index
+    local i = NextMarkerIndex
+    if RouteMarkersList[i][1] == markerType then return i end
+    -- Increment index
+    i = i + 1 if i > #RouteMarkersList then i = 1 end
+    -- Loop through each RouteMarker once
+    while i ~= NextMarkerIndex do
+        -- Check index
+        if RouteMarkersList[i][1] == markerType then return i end
+        -- Increment index
+        i = i + 1 if i > #RouteMarkersList then i = 1 end
+    end
+    -- If there are no matching types 
+    return 0
+end
+
+
+function GetCurrentSpeed()
+    print("GetCurrentSpeed()")
+    if Reverser == -1 then 
+        return component.ir_remote_control.info().speed * -1 
+    else
+        return component.ir_remote_control.info().speed
+    end
+end
+
+
+function SignalsAndStops()
+    print("SignalsAndStops()")
+    RouteMarkerNextIndexSignal = GetRouteMarkerIndexOfNextOfType("signal")
+    if PastNextSignalCheck() then
+        if NextSignalStatusCheck() == "GREEN" then
+            -- If we just passed a green signal 
+
+            -- Find next signal
+            local i = NextMarkerIndex
+            while RouteMarkersList[i][1] ~= "signal" do
+                print("WARNING: NextMarker was not a signal")
+                i = i + 1
+                if i > #RouteMarkersList then
+                    i = 1
+                end
+            end -- next signal == i
+
+            SignalController("Change "..RouteMarkersList[i][2].." "..RouteMarkersList[i][3])
+
+            --SignalController("Change "..RouteMarkersList[SignalsList[NextSignal]][2].." "..RouteMarkersList[SignalsList[NextSignal]][3])    -- Change signals based on the signal we just passed 
+            print("POI INDEX INCERMENTED A")
+            NextMarkerIndex = NextMarkerIndex + 1                                   -- Increment POI list 
+            if NextMarkerIndex > #RouteMarkersList then NextMarkerIndex = 1 end     -- Loop back to the start of the list when we reach the end 
+            NextSignal = NextSignal + 1                                             -- Increment SignalsList list 
+            if NextSignal > #SignalsList then NextSignal = 1 end                    -- Loop back to the start of the list when we reach the end 
+            print("Passed green signal - incrementing NextMarkerIndex")
+        else
+            print("Passed a red signal... oh no")
+        end
+    else
+        print("PastNextSignalCheck() == false")
+        if CurrentSpeed ~= 0 then   -- if train is moving then
+            -- Add all signals within stopping trigger distance to signalRequest 
+            local signalRequest = "Check"
+            local withinRange = true
+            local nextSignalMarker = NextMarkerIndex
+            --local SignalIndex = NextSignal
+
+            while withinRange == true do
+                print("while withinRange == true")
+                -- Find next signal
+                local startingSignalMarker = nextSignalMarker
+                while RouteMarkersList[nextSignalMarker][1] ~= "signal" do
+                    print("while RouteMarkersList[nextSignalMarker][1] ~= signal")
+                    nextSignalMarker = nextSignalMarker + 1
+                    if nextSignalMarker > #RouteMarkersList then
+                        nextSignalMarker = 1
+                    end
+                    if nextSignalMarker == startingSignalMarker then
+                        break   -- So we don't get stuck in an endless loop 
+                    end
+                end
+
+                -- Calculate SignalStoppingTriggerSpeed
+                local SignalX = RouteMarkersList[nextSignalMarker][2]
+                local SignalZ = RouteMarkersList[nextSignalMarker][3]
+                local DistanceToSignal = CalculateDistance(CurrentX, CurrentZ, SignalX, SignalZ)
+                local SignalStoppingTriggerSpeed = GetStoppingTriggerSpeed(DistanceToSignal)
+
+                -- Add to the signal request if within stopping trigger speed 
+                if CurrentSpeed > SignalStoppingTriggerSpeed then
+                    signalRequest = signalRequest.." "..SignalX.." "..SignalZ
+                    nextSignalMarker = nextSignalMarker + 1
+                    if nextSignalMarker > #RouteMarkersList then
+                        nextSignalMarker = 1
+                    end
+                else
+                    withinRange = false
+                end
+
+                if GetCurrentSpeed() == 0 then
+                    break
+                else
+                    print(GetCurrentSpeed())
+                end
+                os.sleep(1)
+            end
+
+
+            local signalResult = SplitString(SignalController(signalRequest))   -- eg. "RED 124 2453" (next red) 
+            if signalResult[1] == "RED" then    -- if approaching a red signal 
+                TargetX = tonumber(signalResult[2]) -- set target to next red signal 
+                TargetZ = tonumber(signalResult[3])
+                print("Approaching a red signal at "..TargetX.." "..TargetZ)
+            else    -- if no upcoming red 
+                TargetX = tonumber(RouteMarkersList[NextStation][2])    -- set target to next station  
+                TargetZ = tonumber(RouteMarkersList[NextStation][3])    -- Is this right? 
+                print("Approaching the next station at "..TargetX.." "..TargetZ)
+            end
+        else
+            if CalculateDistance(CurrentX, CurrentZ, RouteMarkersList[NextMarkerIndex][2], RouteMarkersList[NextMarkerIndex][3]) < SIGNAL_STOPPING_ACCURACY then    --if train close enough to next signal then 
+                while NextSignalStatusCheck() == "RED" do   -- while signal is red do 
+                    print("Waiting at a red signal")
+                    os.sleep(STOPPED_AT_RED_CHECK_FREQUENCY)    -- wait
+                end
+                -- NextPOI = NextPOI + 1   -- Increment signal list 
+                -- if NextPOI > #RoutePOI then NextPOI = 1 end
+                print("The red signal we stopped at has turned green, onwards!")
+            end
+        end
+    end
+end
+
+
+function NewCheckSignals()
+
+    local FoundNextStation = false
+    local i = NextMarkerIndex
+    local request = "Check"
+
+    -- Search each next POI until a station is found 
+    while FoundNextStation == false do
+        if RouteMarkersList[i][1] == "signal" then
+            request = request.." "..RouteMarkersList[NextMarkerIndex][2].." "..RouteMarkersList[NextMarkerIndex][3]     -- Add this signal to the request to check 
+            i=i+1 if i>#RouteMarkersList then i=1 end                                           -- next POI in list 
+        elseif RouteMarkersList[i][1] == "station" then
+            FoundNextStation = true                                                     -- Station found; break loop 
+            NextStation = i                                                             -- This POI is the next station 
+        else
+            i=i+1 if i>#RouteMarkersList then i=1 end                                           -- next POI in list 
+        end
+    end
+
+    response = SplitString(SignalController(request))
+    if response[1] == "GREEN" then                              -- All GREEN, continue to NextStation 
+        TargetX = tonumber(RouteMarkersList[NextStation][2])
+        TargetZ = tonumber(RouteMarkersList[NextStation][3])
+        --print("New target (station) = "..tostring(TargetX).." "..tostring(TargetZ))
+        DebugNextHalt = "Station "..TargetX.." "..TargetZ
+    elseif response[1] == "RED" then                            -- Found RED, target next red 
+        TargetX = tonumber(response[2])
+        TargetZ = tonumber(response[3])
+        DebugNextHalt = "Signal red "..TargetX.." "..TargetZ
+        --print("New target (signal) = "..tostring(TargetX).." "..tostring(TargetZ))
+    else
+        print("ERROR: Unexpected response "..response[1])       -- Not RED or GREEN, something is wrong 
+    end
+
+end
+
+
+-- GetCurrentSpeed() was here
+
+
+function GetStoppingDistance()
+    print("GetStoppingDistance()")
+    PreviousStoppingDistance = StoppingDistance
+    if TargetX == nil then
+        print("TargetX == nil")
+        TargetX = tonumber(RouteMarkersList[NextStation][2])
+        TargetZ = tonumber(RouteMarkersList[NextStation][3])
+    end
+    return CalculateDistance(CurrentX, CurrentZ, TargetX, TargetZ)  -- TargetX is nil 
+end
+
+
+function GetSignalsFromRoutePOI()
+    SignalsList = {}
+    for index, value in ipairs(RouteMarkersList) do
+        if RouteMarkersList[index][1] == "Signal" or RouteMarkersList[index][1] == "signal" then
+            table.insert(SignalsList, index)
+            if index == NextMarkerIndex then
+                NextSignal = NextMarkerIndex
+            end
+        end
+    end
+    return SignalsList
+end
+
+
+function StoppedAtStation()
+    print("StoppedAtStation()")
+
+    -- Get index of next station
+    local nextStation = NextMarkerIndex
+    while RouteMarkersList[nextStation][1] ~= "station" do
+        print("WARNING: NextMarkerIndex was "..RouteMarkersList[nextStation][1].." not station")
+        nextStation = nextStation + 1
+        if nextStation > #RouteMarkersList then
+            nextStation = 1
+        end
+    end
+
+    local WaitTime = RouteMarkersList[nextStation][4]
+    print("Waiting for "..WaitTime)
+    os.sleep(tonumber(WaitTime))
+    print("POI INDEX INCERMENTED B")
+    NextMarkerIndex = NextMarkerIndex + 1
+    if NextMarkerIndex > #RouteMarkersList then NextMarkerIndex = 1 end
+    print("tmp3")
+    --Reverser = tonumber(RouteMarkersList[nextStation][5])
+    --Train.setReverser(Reverser)
+
+    print("tmp1")
+
+    -- Do we need any of this junk?
+    PastStation = false
+    BackingToStation = false
+    PassingPOI = true
+    Stopping = false
+    for _, Item in ipairs(StationsList) do Item[5] = false end
+    StationsList[Station][5] = true
+    Station = Station + 1
+    if Station > NumberOfStations then Station = 1 end
+
+    File = io.open("AutoTrain persistence", "w")
+    File:write(Station)     -- Change to NextMarkerIndex? 
+    File:close()
+
+    NextStationRouteMarkersListIndex = nextStation
+    -- TargetX = tonumber(RouteMarkersList[nextStation][2])
+    -- TargetZ = tonumber(RouteMarkersList[nextStation][3])
+    GetStoppingDistance()
+    print("Next target is POI "..NextStationRouteMarkersListIndex)
+    ReadyToLeaveStation = true
+    print("tmp2")
+end
+
+
+function RunLine()
+    ReadLine(Filename)
+    TARGET_SPEED = DEFAULT_SPEED
+    Reverser = component.ir_remote_control.info().reverser
+    File = io.open("AutoTrain persistence", "r")
+    print("RouteMarkerNextIndexAny =")
+    print(NextMarkerIndex)
+    NextMarkerIndex = tonumber(File:read("a"))
+    print(NextMarkerIndex)
+    Station = NextMarkerIndex
+    File:close()
+
+    SignalsList = GetSignalsFromRoutePOI()
+    while true do
+        debug = ""
+
+        -- Gather dataset 
+        CurrentSpeed                = GetCurrentSpeed()
+        Acceleration                = GetAcceleration()
+        ThrottleOutput              = component.ir_remote_control.info().throttle
+        CurrentX,CurrentY,CurrentZ  = component.ir_remote_control.getPos()
+        SignalsAndStops()
+        StoppingDistance            = GetStoppingDistance()
+        StoppingTriggerSpeed        = GetStoppingTriggerSpeed(StoppingDistance)
+        TargetAcceleration          = GetStoppingAcceleration()
+
+        --PreviousNextPOI = NextPOI
+
+
+        if CurrentSpeed > StoppingTriggerSpeed then
+            -- APPROACHING STATION 
+            print("CurrentSpeed > StoppingTriggerSpeed")
+            Stopping = true
+            NewStoppingTrain()
+        else
+            -- if NewAtStationCheck() or (PastStation and CurrentSpeed == 0) then
+            --     -- AT OR STOPPED PAST STATION 
+            --     print("NewAtStationCheck() or (PastStation and CurrentSpeed == 0)")
+            --     print("PastStation = "..tostring(PastStation))
+            --     NewStoppingTrain()
+
+            -- else
+            if (CurrentSpeed == 0) and NewAtStationCheck() then
+                -- If stopped at station 
+                print("If stopped at station")
+                StoppedAtStation()
+
+            elseif (CurrentSpeed == 0) and PastStation then
+                -- If stopped past station 
+                print("If stopped past station")
+                NewStoppingTrain()
+
+            elseif NewAtStationCheck() then
+                -- If still moving at station 
+                print("If still moving at station")
+                NewStoppingTrain()
+
+            else
+                -- If no station is here 
+                print("If no station is here")
+                Stopping = false
+                ReachSpeed()
+            end
+        end
+
+        if TARGET_SPEED ~= PreviousTargetSpeed then
+            StartingSpeed = CurrentSpeed
+        end
+        PreviousTargetSpeed = TARGET_SPEED
+
+        Debug()
+        --os.sleep(COMPUTER_LOOP_SPEED)
+    end
+end
+
+
+function GetRoutes(PageID, SelectionID)
+    SelectionPages[PageID][3] = {}
+    File = io.open("AutoTrain_Data", "r")
+    CurrentSection = nil
+    for line in io.lines("AutoTrain_Data") do
+        Str1 = line
+        if Str1:sub(1,1) == "#" or Str1 == "" then
+            -- Skip line --
+        elseif Str1 == "ROUTES" or Str1 == "PERSISTENCE" then
+            CurrentSection = Str1
+        else
+            if CurrentSection == "ROUTES" then
+                table.insert(SelectionPages[PageID][3], {Str1, SelectionID})
+            end
+        end
+    end
+    table.insert(SelectionPages[PageID][3], {"Back", 0})
+end
+
+
+function AddRouteInfoToFile()
+    Str1 = ""
+    File = io.open(SelectedRoute, "r")
+    for line in io.lines(SelectedRoute) do
+        LineString = line
+        if LineString == "SPEED LIMITS" then
+            Str1 = Str1..(string.format("%.1f", CurrentX)).." "..(string.format("%.0f", CurrentZ)).." "..StopTime.." "..DirectionFromStation.."\n"
+        end
+        Str1 = Str1..LineString.."\n"
+    end
+    File:close()
+    File = io.open("Route_Backup", "w")
+    File:write(Str1)
+    File:close()
+    File = io.open(SelectedRoute, "w")
+    File:write(Str1)
+    File:close()
+end
+
+
+function SetDefaultSpeed(DefaultSpeed)
+    Str = ""
+    File = io.open(SelectedRoute, "r")
+    FoundSection = false
+    for line in io.lines(SelectedRoute) do
+        if FoundSection then
+            if line[0] ~= '#' then
+                -- take this line, split it up, set the 8th number to DefaultSpeed, save 
+                RouteConstantsArray = SplitString(line)
+                for i = 1, 7, 1 do
+                    Str = Str.." "..RouteConstantsArray[i]
+                end
+                Str = Str.." "..DefaultSpeed
+                for i = 9, 10, 1 do
+                    Str = Str.." "..RouteConstantsArray[i]
+                end
+                Str = Str.."\n"
+                FoundSection = false
+            end
+        else
+            Str = Str..line.."\n"
+            if line == "CONSTANTS" then
+                FoundSection = true
+            end
+        end
+    end
+    File:close()
+    File = io.open("Route_Backup", "w")
+    File:write(Str)
+    File:close()
+    File = io.open(SelectedRoute, "w")
+    File:write(Str)
+    File:close()
+end
+
+
+SelectionPages = {
+    {"#01 Main_menu",       "Welcome\n", {{"Start route", 1}, {"Create route", 7}, {"Edit route (WIP)", 1}, {"Remove route", 4}, {"Info/Help (WIP)", 1}, {"Quit", 6} }, "\nUse the arrow keys and Enter to make a selection"},
+    {"#02 Routes list",     "Select a route to run:", {{"Back", 0}}, ""},
+    {"#03 Add_route_data",  "Route creation", { {"Add a stop", 13}, {"Add a speed change (WIP)", 9}, {"Settings (WIP)", 1}, {"Set default speed", 15}, {"Done", 0} }, ""},
+    {"#04 Adding stop", "", { {"Use current location of train", 14}, {"Enter coordinates manually (WIP)", 8}, {"Back", 0} }, ""},
+    {"#05 Routes list to delete", "Select a route to remove from the list", {{"Back", 0}}, "The file will still be saved on the computer"},
+    {"#06 Add a speed",  "", { {"Use current location of train", 16}, {"Enter coordinates manually (WIP)", 17}, {"Back", 0} }, ""},
+    {"#07 Adding a speed", "", { {"Use current location of train", 18}, {"Enter coordinates manually (WIP)", 19}, {"Back", 0} }, ""},
+    {"#08 Reversing", "Should the train reverse when leaving this station?", { {"Forwards", 20}, {"Reverse", 21} }, ""},
+    {"#09 Where to start",  "Which station would you like to start with? ", { {"Back", 0} }, ""},
+    {"#10", "Set starting reverser", { {"Forward", 10}, {"Reverse", 10} }, "Reverser is currently set to _"},
+    {"Page_ID",         "HEADER", { {"OPTION", SelectionID} }, "FOOTER"},
+    {"Page_ID",         "HEADER", { {"OPTION", SelectionID} }, "FOOTER"}
+}
+
+
+StringPages = {
+    {"Enter a NAME for the route: ", 7},
+    {"Enter an X and Z coordinate: ", 12}
+}
+
+
+function UI_Action(SelectionID)
+    if     SelectionID == 0 then
+        -- GO TO MAIN MENU 
+        CurrentPage = SelectionPages[1]
+        WaitingForSelection = true
+        Selected = 1
+        SelectionUI()
+    elseif SelectionID == 1 then
+        -- Choose a route to start 
+        GetRoutes(2,2)
+        CurrentPage = SelectionPages[2]
+        WaitingForSelection = true
+        Selected = 1
+        SelectionUI()
+    elseif SelectionID == 2 then
+        -- Get route name 
+        Filename = SelectionPages[2][3][Selected][1]
+        
+        -- Get NumberOfStations 
+        File = io.open(Filename, "r")
+        CurrentSection = nil
+        NumberOfStations = 0
+        for line in io.lines(Filename) do
+            
+            POI_Data = SplitString(line)
+            if POI_Data[1] == "station" then
+                NumberOfStations = NumberOfStations + 1
+            end
+
+
+            -- Str1 = line
+            -- if Str1:sub(1,1) == "station" then
+            --     NumberOfStations = NumberOfStations + 1
+            -- end
+
+
+        end
+        print("NumberOfStations = "..NumberOfStations)
+        File:close()
+        if FileExists("AutoTrain persistence") then
+            File = io.open("AutoTrain persistence", "r")
+            NextMarkerIndex = tonumber(File:read("a"))
+            File:close()
+        else
+            NextMarkerIndex = 0
+        end
+        SelectionPages[9][3] = {}
+        for i = 1, NumberOfStations, 1 do
+            if i == NextMarkerIndex then
+                table.insert(SelectionPages[9][3], {i.." (Previously the next stop)",5})
+            else
+                table.insert(SelectionPages[9][3], {i,5})
+            end
+        end
+        CurrentPage = SelectionPages[9]
+        WaitingForSelection = true
+        Selected = 1
+        SelectionUI()
+    elseif SelectionID == 3 then
+        CurrentPage = SelectionPages[4]
+        WaitingForSelection = true
+        Selected = 1
+        SelectionUI()
+    elseif SelectionID == 4 then
+        GetRoutes(5,11)
+        CurrentPage = SelectionPages[5]
+        WaitingForSelection = true
+        Selected = 1
+        SelectionUI()
+    elseif SelectionID == 5 then
+        -- Create persistence file with selected option as current stop 
+        File = io.open("AutoTrain persistence", "w")
+        File:write(Selected)
+        File:close()
+
+        Reverser = component.ir_remote_control.info().reverser
+        if Reverser == 1 then
+            SelectionPages[10][4] = "Reverser is currently set to forward"
+        elseif Reverser == -1 then
+            SelectionPages[10][4] = "Reverser is currently set to reverse"
+        else
+            SelectionPages[10][4] = "Reverser is currently set to "..Reverser
+        end
+
+         -- Open page 
+         CurrentPage = SelectionPages[10]
+         WaitingForSelection = true
+         Selected = 1
+         SelectionUI()
+
+    elseif SelectionID == 6 then
+        -- Quit
+    elseif SelectionID == 7 then
+        -- Save new route name 
+        print("Enter a name for the route: ")
+        Input = io.read()
+        while FileExists(Input) or Input == "" do
+            os.execute("cls")
+            if Input ~= "" then
+                print("Error: A file already exists with that name")
+            end 
+            print("Enter a name for the route: ")
+            Input = io.read()
+        end
+
+        SelectedRoute = Input
+        File = io.open(SelectedRoute, "w")
+        File:write("CONSTANTS\n0.015 0.25 200 0.5 0.025 0.1 1 100 1 0.2\nSTOPS\nSPEED LIMITS\nSIGNALS\nSWITCHES")
+        File:close()
+
+        -- Add route name to data file 
+        local AutoTrain_Data_Text = ""
+        File = io.open("AutoTrain_Data", "r")
+        for line in io.lines("AutoTrain_Data") do
+            AutoTrain_Data_Text = AutoTrain_Data_Text.."\n"..line
+            if line == "ROUTES" then
+                AutoTrain_Data_Text = "\n"..AutoTrain_Data_Text.."\n"..Input
+            end
+        end
+        File:close()
+
+        File = io.open("AutoTrain_Data_Backup", "w")
+        File:write(AutoTrain_Data_Text)
+        File:close()
+
+        File = io.open("AutoTrain_Data", "w")
+        File:write(AutoTrain_Data_Text)
+        File:close()
+
+        CurrentPage = SelectionPages[3]
+        WaitingForSelection = true
+        Selected = 1
+        SelectionUI()
+    elseif SelectionID == 8 then
+        -- Add stop Z and Z manually 
+        CurrentPage = StringPages[2]
+        StringUI()
+
+    elseif SelectionID == 9 then
+        -- Add a speed
+        CurrentPage = SelectionPages[6]
+        WaitingForSelection = true
+        Selected = 1
+        SelectionUI()
+
+    elseif SelectionID == 10 then
+        -- Run line 
+        if Selected == 2 then
+            Train.setReverser(-1)
+            Reverser = -1
+        else
+            Train.setReverser(1)
+            Reverser = 1
+        end
+        RunLine()
+
+    elseif SelectionID == 11 then
+        -- Delete Route 
+        Filename = SelectionPages[5][3][Selected][1]
+        os.remove(Filename)
+
+        -- Remove route name from data file 
+        local AutoTrain_Data_Text = ""
+        File = io.open("AutoTrain_Data", "r")
+        for line in io.lines("AutoTrain_Data") do
+            if line ~= Filename then
+                AutoTrain_Data_Text = AutoTrain_Data_Text.."\n"..line
+            end
+        end
+        File:close()
+
+        File = io.open("AutoTrain_Data_Backup", "w")
+        File:write(AutoTrain_Data_Text)
+        File:close()
+
+        File = io.open("AutoTrain_Data", "w")
+        File:write(AutoTrain_Data_Text)
+        File:close()
+        
+        CurrentPage = SelectionPages[1]
+        WaitingForSelection = true
+        Selected = 1
+        SelectionUI()
+
+    elseif SelectionID == 12 then
+        -- Save X and Z 
+        CurrentPage = SelectionPages
+
+    elseif SelectionID == 13 then
+        -- Add a stop 
+        CurrentPage = SelectionPages[4]
+        WaitingForSelection = true
+        Selected = 1
+        SelectionUI()
+
+    elseif SelectionID == 14 then
+        -- Get stop X and Z from current location 
+        if component.ir_remote_control.getPos() == nil then
+            print("No coordinates found")
+            os.sleep(2)
+        else
+            CurrentX, CurrentY, CurrentZ = component.ir_remote_control.getPos()
+
+            -- Get stop time 
+            print("How many seconds should the train stop for: ")
+            Input = io.read()
+
+            Input = tonumber(Input)
+            while type(Input) ~= "number" do
+                os.execute("cls")
+                print("Please enter a number")
+                print("How many seconds should the train stop for: ")
+                Input = io.read()
+                Input = tonumber(Input)
+            end
+            StopTime = Input
+        end
+        CurrentPage = SelectionPages[8]
+        WaitingForSelection = true
+        Selected = 1
+        SelectionUI()
+
+    elseif SelectionID == 15 then
+        -- Get defualt speed from user 
+        print("What should the default speed be?\n")
+        Input = io.read()
+        Input = tonumber(Input)
+        while type(Input) ~= "number" do
+            os.execute("cls")
+            print("Please enter a number")
+            print("What should the default speed be?\n")
+            Input = io.read()
+            Input = tonumber(Input)
+        end
+        SetDefaultSpeed(Input)
+
+        CurrentPage = SelectionPages[3]
+        WaitingForSelection = true
+        Selected = 1
+        SelectionUI()
+
+    elseif SelectionID == 16 then
+        -- Get stop X and Z from current location 
+        if component.ir_remote_control.getPos() == nil then
+            print("No coordinates found")
+            os.sleep(2)
+        else
+            CurrentX, CurrentY, CurrentZ = component.ir_remote_control.getPos()
+        end
+        CurrentPage = SelectionPages[3]
+        WaitingForSelection = true
+        Selected = 1
+        StringUI()
+
+    elseif SelectionID == 17 then
+
+    elseif SelectionID == 18 then
+        -- Get stop X and Z from current location 
+        if component.ir_remote_control.getPos() == nil then
+            print("No coordinates found")
+            os.sleep(2)
+        else
+            CurrentX, CurrentY, CurrentZ = component.ir_remote_control.getPos()
+        end
+
+        -- Get speed limit  
+        print("New speed limit at this location: ")
+        Input = io.read()
+        Input = tonumber(Input)
+        while type(Input) ~= "number" do
+            os.execute("cls")
+            print("Please enter a number")
+            print("New speed limit at this location: ")
+            Input = io.read()
+            Input = tonumber(Input)
+        end
+
+        -- Write coordinates and speed limit to route file 
+        Str1 = ""
+        File = io.open(SelectedRoute, "r")
+        for line in io.lines(SelectedRoute) do
+            LineString = line
+
+            if LineString == "SIGNALS" then
+                Str1 = Str1..(string.format("%.1f", CurrentX)).." "..(string.format("%.0f", CurrentZ)).." "..Input.."\n"
+            end
+            Str1 = Str1..LineString.."\n"
+        end
+
+        File:close()
+        File = io.open("Route_Backup", "w")
+        File:write(Str1)
+        File:close()
+        File = io.open(SelectedRoute, "w")
+        File:write(Str1)
+        File:close()
+
+
+        CurrentPage = SelectionPages[3]
+        WaitingForSelection = true
+        Selected = 1
+        SelectionUI()
+
+    elseif SelectionID == 19 then
+
+    elseif SelectionID == 20 then
+        -- Forwards from station  
+        DirectionFromStation = "1"
+        AddRouteInfoToFile()
+        CurrentPage = SelectionPages[3]
+        WaitingForSelection = true
+        Selected = 1
+        SelectionUI()
+
+    elseif SelectionID == 21 then
+        -- Reverse from station 
+        DirectionFromStation = "-1"
+        AddRouteInfoToFile()
+        CurrentPage = SelectionPages[3]
+        WaitingForSelection = true
+        Selected = 1
+        SelectionUI()
+
+    elseif SelectionID == 22 then
+
+    else
+        -- SelectionID out of bounds 
+    end
+end
+
+
+function DrawPage(PageContent)
+    NumberOfOptions = 0
+    os.execute("cls")
+    print(PageContent[2])
+    for i, value in ipairs(PageContent[3]) do
+        if i == Selected then
+            print("-"..value[1])
+        else
+            print(" "..value[1])
+        end
+        NumberOfOptions = NumberOfOptions + 1
+    end
+    print(PageContent[4])
+end
+
+function SelectionUI()
+    local event = require("event")
+    while WaitingForSelection do
+        DrawPage(CurrentPage)
+        event,_,letterAsciiCode,letterCode,_ = computer.pullSignal()
+        if (event == "key_down" and letterCode == 208) then -- Down 
+            Selected = Selected + 1
+            if Selected > NumberOfOptions then Selected = 1 end
+            DrawPage(CurrentPage)
+        elseif (event == "key_down" and letterCode == 200) then -- Up 
+            Selected = Selected - 1
+            if Selected < 1 then Selected = NumberOfOptions end
+            DrawPage(CurrentPage)
+        elseif (event == "key_down" and letterCode == 28) then -- Enter 
+            print(CurrentPage)
+            print(CurrentPage[3])
+            print("Selected = "..Selected)
+            print(CurrentPage[3][Selected])
+            print("SelectionID = "..CurrentPage[3][Selected][2])
+            SelectionID = CurrentPage[3][Selected][2]       -- NIL VALUE -- FIX THIS 
+            os.execute("cls")
+            UI_Action(SelectionID)
+            WaitingForSelection = false
+        end
+    end
+end
+
+function StringUI()
+    print(CurrentPage[1])
+    Input = io.read()
+    UI_Action(CurrentPage[2])
+end
+
+--==*==--
+
+-- If data file doesn't exist, create one 
+if FileExists("AutoTrain_Data") == false then
+    File = io.open("AutoTrain_Data", "w")
+    File:write("ROUTES\n\nPERSISTENCE\n")
+    File:close()
+end
+
+CurrentPage = SelectionPages[1]
+SelectionUI()
