@@ -1,0 +1,285 @@
+component = require("component")
+event = require("event")
+Network = component.modem
+Network.open(1)
+Network.open(2)
+Network.open(3)
+Network.open(4)
+Network.open(5)
+Network.open(6)
+Network.open(7)
+Network.open(8)
+Network.open(9)
+Network.open(10)
+
+ID      = 1
+POI_TYPE = 2
+SIGNAL_X = 3
+SIGNAL_Z    = 4
+SIGNAL_STATE   = 5
+SIGNAL_TO_CHANGE_X= 6
+SIGNAL_TO_CHANGE_Z   = 7
+SIGNAL_TO_CHANGE_STATE  = 8
+
+POI_FILE = "POI.txt"
+--SIGNAL_BACKUP_FILE = "Signals_backup.txt"
+
+function AddSignal(SignalPosX, SignalPosZ)
+    print("AddSignal()")
+    local SignalFound = false
+
+    File = io.open(POI_FILE, "r")
+    for line in io.lines(POI_FILE) do
+        local SignalData = SplitString(line)
+        if SignalData[3] == SignalPosX and SignalData[4] == SignalPosZ then
+            File:close()
+            return "Signal_already_exists"
+        end
+    end
+    File:close()
+
+    File = io.open(POI_FILE, "a")
+    File:write(SignalPosX.." "..SignalPosZ.." GREEN\n")
+    File:close()
+
+    return "Added_signal"
+end
+
+
+function NewSetSignal(SignalPosX, SignalPosZ, SignalState)
+    print("NewSetSignal()")
+    local StringBuilder = ""
+    local SignalFound = false
+    local count = 0
+
+    File = io.open(POI_FILE, "r")
+    for line in io.lines(POI_FILE) do
+        local POIData = SplitString(line)
+
+        if POIData[2] == "signal" then
+            -- if this line is a signal 
+            count = count + 1
+
+            -- -- Add signal status if missing 
+            -- if #POIData < 5 then
+            --     StringBuilder = StringBuilder..line.." GREEN\n"
+            -- end
+    
+            -- Compare co-ords on this line 
+            if POIData[3] == SignalPosX and POIData[4] == SignalPosZ then
+                print("FOUND!")
+                SignalFound = true
+                StringBuilder = StringBuilder..POIData[1].." "..POIData[2].." "..SignalPosX.." "..SignalPosZ.." "..SignalState.."\n"
+                print("Setting to "..SignalState)
+            else
+                StringBuilder = StringBuilder..line.."\n"
+                --print(POIData[3].." "..POIData[4].." is not a match")
+            end
+
+        else
+            -- if this line is not a signal 
+            StringBuilder = StringBuilder..line.."\n"
+            --print("NOT A SIGNAL")
+        end
+
+    end
+    File:close()
+
+    File = io.open(POI_FILE, "w")
+    File:write(StringBuilder)
+    File:close()
+
+    File = io.open("POI 2.txt", "w")
+    File:write(StringBuilder)
+    File:close()
+
+    -- Set redstone 
+    if SignalFound then
+        if SignalState == "RED" then
+            Redstone(SignalPosX, SignalPosZ, "signal off")
+        elseif SignalState == "GREEN" then
+            Redstone(SignalPosX, SignalPosZ, "signal on")
+        else
+            print("ERROR: Bad SignalState")
+        end
+        return "Signal_set"
+    else
+        return "Signal_not_found"
+    end
+
+end
+
+
+function NewCheckSignal(SplitMessage)
+    print("NewCheckSignal()")
+    File = io.open(POI_FILE, "r")
+    for i = 2, #SplitMessage, 2 do
+        for line in io.lines(POI_FILE) do
+            local SignalData = SplitString(line)
+
+            if SignalData[2] == "signal" then
+                
+                if (SplitMessage[i] == SignalData[3]) and (SplitMessage[i+1] == SignalData[4]) then
+                    print("Signal found!")
+                    print("SignalData[5] = "..SignalData[5])
+                    if SignalData[5] == "RED" then
+                        print("Signal RED")
+                        File:close()
+                        return "RED "..SplitMessage[i].." "..SplitMessage[i+1]
+                    else
+                        print("Signal not RED: "..SignalData[5])
+                    end
+                end
+            end
+                
+        end
+    end
+    File:close()
+    return "GREEN"
+end
+
+
+function SplitString(inputstr, sep)
+    if sep == nil then
+        sep = "%s"
+    end
+    local t={}
+    for str in string.gmatch(inputstr, "([^"..sep.."]+)") do
+        table.insert(t, str)
+    end
+    return t
+end
+
+
+function Redstone(POIX, POIZ, Type, Action)
+    File = io.open(POI_FILE, "r")
+    local count = 0
+    local port = 101
+    for line in io.lines(POI_FILE) do
+        local POIData = SplitString(line)
+        if POIData[2] == Type then
+            count = count + 1
+            if POIData[3] == POIX then
+                if POIData[4] == POIZ then
+                    print("POI found!")
+                    if Type == "signal" then
+
+                        local i = count
+                        while i > 4 do
+                            i = i - 4
+                            port = port + 1
+                        end
+                        print("Port: "..port)
+                        print("i: "..(i+1))
+
+                        Network.open(port)
+                        Network.broadcast(port, (i+1).." "..Action)
+
+                    elseif Type == "switch" then
+
+                        local i = count
+                        while i > 4 do
+                            i = i - 4
+                            port = port + 1
+                        end
+                        port = port + 100
+                        print("Port: "..port)
+                        print("i: "..i)
+
+                        Network.open(port)
+                        Network.broadcast(port, (i+1).." "..Action)
+
+                    else
+                        print("ERROR: Invalid type")
+                    end
+                end
+            end
+        else
+            --print(POIData[2].." doesn't match "..Type)
+        end
+    end
+    File:close()
+end
+
+
+function Change(SignalPassedX, SignalPassedZ)
+
+    -- Get signals to be changed 
+    local signalsToChange = {}
+    File = io.open(POI_FILE, "r")
+    for line in io.lines(POI_FILE) do
+        local SplitLine = SplitString(line)
+        if SplitLine[POI_TYPE] == "signal" then
+            if SplitLine[SIGNAL_X] == SignalPassedX and SplitLine[SIGNAL_Z] == SignalPassedZ then
+                for i = 1, (#SplitLine - ((SIGNAL_TO_CHANGE_X-1)/3)), 1 do  -- For each signal to be changed (i=1, i=2, i=3...)
+                    signalsToChange[i][1] = SplitLine[SIGNAL_TO_CHANGE_X]   -- Record signals to be changed 
+                    signalsToChange[i][2] = SplitLine[SIGNAL_TO_CHANGE_Z]
+                    signalsToChange[i][3] = SplitLine[SIGNAL_TO_CHANGE_STATE]
+                end
+            end
+        end
+    end
+    File:close()
+
+    -- Create an altered copy of data  
+    local StringBuilder = ""
+    File = io.open(POI_FILE, "r")
+    for line in io.lines(POI_FILE) do
+        local SplitLine = SplitString(line)
+        if SplitLine[POI_TYPE] == "signal" then
+            for i = 1, #signalsToChange, 1 do   -- For each signal to be changed 
+                if SplitLine[SIGNAL_X] == signalsToChange[i][1] and SplitLine[SIGNAL_Z] == signalsToChange[i][2] then   -- Does this signal match one that needs changing 
+                    StringBuilder = StringBuilder..SplitLine[ID].." "..POI_TYPE.." "..SIGNAL_X.." "..SIGNAL_Z.." "..signalsToChange[i][3]
+
+                    -- Add the rest of the line to StringBuilder 
+                    local c = SIGNAL_STATE
+                    while c < #SplitLine do
+                        c=c+1
+                        StringBuilder = StringBuilder..SplitLine[c]
+                    end
+
+                    StringBuilder = StringBuilder.."\n" -- Go to the next line 
+                else
+                    StringBuilder = StringBuilder..line.."\n"
+                end
+            end
+        else
+            StringBuilder = StringBuilder..line.."\n"
+        end
+    end
+    File:close()
+
+    -- Replace file with altered data (StringBuilder)
+    File = io.open(POI_FILE, "w")
+    File:write(StringBuilder)
+    File:close()
+
+    return ""
+end
+
+
+while true do
+    local _, _, from, port, _, message = event.pull("modem_message")
+    local SplitMessage = SplitString(message)
+    local Response = ""
+    print("Recieved request: "..message)
+
+    if     SplitMessage[1] == "Add" then
+        Response = AddSignal(SplitMessage[2], SplitMessage[3])
+    elseif SplitMessage[1] == "Set" then
+        Response = NewSetSignal(SplitMessage[2], SplitMessage[3], SplitMessage[4])
+    elseif SplitMessage[1] == "Check" then
+        Response = NewCheckSignal(SplitMessage)
+    elseif SplitMessage[1] == "Switch" then
+        Response = "Point set"
+        Redstone(SplitMessage[2], SplitMessage[3], "switch", SplitMessage[4])
+    elseif SplitMessage[1] == "Change" then
+        Response = Change(SplitMessage[2], SplitMessage[3])
+    else
+        Response = "ROOR "..SplitMessage[1]
+    end
+
+    Network.open(port+1)
+    Network.broadcast(port+1, Response)
+    print(Response)
+end
